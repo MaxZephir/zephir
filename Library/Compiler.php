@@ -110,6 +110,30 @@ class Compiler
         $this->logger = $logger;
         $this->stringManager = new StringsManager();
         $this->fileSystem = new FileSystem();
+        $this->checkRequires();
+    }
+    
+    /**
+     * Check require extensions orther when build your extension
+     */
+    protected function checkRequires()
+    {
+        $extension_requires = $this->config->get("requires");
+        $extension_requires = $extension_requires["extensions"];
+        if ($extension_requires) {
+            $collection_error = PHP_EOL . "\tCould not load Extension : ";
+            foreach ($extension_requires as $key => $value) {
+                if (!extension_loaded($value)) {
+                    $collection_error .= $value . ", ";
+                }
+            }
+            
+            if ($collection_error != PHP_EOL . "\tCould not load Extension : ") {
+                $collection_error .= PHP_EOL . "\tYou must add extensions above before build this extension!";
+                throw new Exception($collection_error);
+            }
+        }
+        
     }
 
     /**
@@ -555,7 +579,7 @@ class Compiler
      */
     public function getGccFlags($development = false)
     {
-        if (PHP_OS != "WINNT") {
+        if (!Utils::isWindows()) {
             $gccFlags = getenv('CFLAGS');
             if (!is_string($gccFlags)) {
                 if (!$development) {
@@ -722,7 +746,7 @@ class Compiler
 
             self::$loadedPrototypes = true;
         }
-        
+
         /**
          * Round 1. pre-compile all files in memory
          */
@@ -863,24 +887,47 @@ class Compiler
         $namespace = str_replace('\\', '_', $this->checkDirectory());
         $needConfigure = $this->generate($command);
         if ($needConfigure) {
+            if (Utils::isWindows()) {
+                echo "start";
+                exec('cd ext && %PHP_DEVPACK%\\phpize --clean', $output, $exit);
+                if (file_exists('ext/Release')) {
+                    exec('rd /s /q ext/Release', $output, $exit);
+                }
+                $this->logger->output('Preparing for PHP compilation...');
+                exec('cd ext && %PHP_DEVPACK%\\phpize', $output, $exit);
+                /* Temporary fix till https://github.com/php/php-src/commit/9a3af83ee2aecff25fd4922ef67c1fb4d2af6201 hits
+                   the PHP builds
+                */
+                file_put_contents(
+                    "ext/configure.js",
+                    "var PHP_ANALYZER = 'disabled';\nvar PHP_PGO = 'no';\nvar PHP_PGI = 'no';".
+                    file_get_contents("ext/configure.js")
+                );
+                $this->logger->output('Preparing configuration file...');
+                exec('cd ext && configure --enable-' . $namespace);
+            } else {
+                exec('cd ext && make clean && phpize --clean', $output, $exit);
 
-            exec('cd ext && make clean && phpize --clean', $output, $exit);
+                $this->logger->output('Preparing for PHP compilation...');
+                exec('cd ext && phpize', $output, $exit);
 
-            $this->logger->output('Preparing for PHP compilation...');
-            exec('cd ext && phpize', $output, $exit);
+                $this->logger->output('Preparing configuration file...');
 
-            $this->logger->output('Preparing configuration file...');
+                $gccFlags = $this->getGccFlags($development);
 
-            $gccFlags = $this->getGccFlags($development);
-
-            exec(
-                'cd ext && export CC="gcc" && export CFLAGS="' . $gccFlags . '" && ./configure --enable-' . $namespace
-            );
+                exec(
+                    'cd ext && export CC="gcc" && export CFLAGS="' . $gccFlags . '" && ./configure --enable-' . $namespace
+                );
+            }
         }
 
         $currentDir = getcwd();
         $this->logger->output('Compiling...');
-        exec('cd ext && (make --silent -j2 2>' . $currentDir . '/compile-errors.log 1>' . $currentDir . '/compile.log)', $output, $exit);
+        if (Utils::isWindows()) {
+            exec('cd ext && nmake 2>' . $currentDir . '\compile-errors.log 1>' . $currentDir . '\compile.log', $output, $exit);
+        } else {
+            exec('cd ext && (make --silent -j2 2>' . $currentDir . '/compile-errors.log 1>' . $currentDir . '/compile.log)', $output, $exit);
+        }
     }
 
     /**
@@ -947,6 +994,10 @@ class Compiler
         @unlink("ext/modules/" . $namespace . ".so");
 
         $this->compile($command, $development);
+        if (Utils::isWindows()) {
+            $this->logger->output("Installation is not implemented for windows yet! Aborting!");
+            exit();
+        }
 
         $this->logger->output('Installing...');
 
@@ -1085,7 +1136,7 @@ class Compiler
         }
         $groups = array();
         foreach ($groupSources as $dirname => $files) {
-            $groups[] = 'ADD_SOURCES("ext/' . $project . '/' . $dirname . '", "' . join(' ', $files) . '", "' . $project . '");';
+            $groups[] = 'ADD_SOURCES(configure_module_dirname + "/' . $dirname . '", "' . join(' ', $files) . '", "' . $project . '");';
         }
         return $groups;
     }

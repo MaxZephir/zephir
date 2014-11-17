@@ -197,7 +197,9 @@ class SymbolTable
                 $superVar = new Variable('variable', $name, $compilationContext->currentBranch);
                 $superVar->setIsInitialized(true, $compilationContext, $statement);
                 $superVar->setDynamicTypes('array');
+                $superVar->setIsExternal(true);
                 $this->_variables[$name] = $superVar;
+
             } else {
 
                 $found = false;
@@ -361,6 +363,11 @@ class SymbolTable
             }
         }
 
+        /**
+         * Saves the lastest place where the variable was used
+         */
+        $variable->setUsed(true, $statement);
+
         return $variable;
     }
 
@@ -373,7 +380,7 @@ class SymbolTable
      * @param array $statement
      * @return Variable
      */
-    public function getVariableForWrite($name, $compilationContext, $statement = null)
+    public function getVariableForWrite($name, $compilationContext, array $statement = null)
     {
         /**
          * Create superglobals just in time
@@ -392,6 +399,7 @@ class SymbolTable
                 $superVar->setDynamicTypes('array');
                 $superVar->increaseMutates();
                 $superVar->increaseUses();
+                $superVar->setUsed(true, $statement);
                 $this->_variables[$name] = $superVar;
                 return $superVar;
             }
@@ -405,12 +413,77 @@ class SymbolTable
         $variable->increaseUses();
         $variable->increaseMutates();
 
+        /**
+         * Saves the last place where the variable was mutated
+         * We discard mutations inside loops because iterations could use the value
+         * and Zephir only provides top-down compilation
+         */
+        if (!$compilationContext->insideCycle) {
+            $variable->setUsed(false, $statement);
+        } else {
+            $variable->setUsed(true, $statement);
+        }
+
+        return $variable;
+    }
+
+    /**
+     * Return a variable in the symbol table, it will be used for a mutating operation
+     * This method implies mutation of one of the members of the variable but no the variables it self
+     *
+     * @param string $name
+     * @param CompilationContext $compilationContext
+     * @param array $statement
+     * @return Variable
+     */
+    public function getVariableForUpdate($name, $compilationContext, array $statement = null)
+    {
+        /**
+         * Create superglobals just in time
+         */
+        if ($this->isSuperGlobal($name)) {
+
+            if (!$this->hasVariable($name)) {
+
+                /**
+                 * @TODO, injecting globals, initialize to null and check first?
+                 */
+                $compilationContext->codePrinter->output('zephir_get_global(&' . $name . ', SS("' . $name . '") TSRMLS_CC);');
+
+                $superVar = new Variable('variable', $name, $compilationContext->currentBranch);
+                $superVar->setIsInitialized(true, $compilationContext, $statement);
+                $superVar->setDynamicTypes('array');
+                $superVar->increaseMutates();
+                $superVar->increaseUses();
+                $superVar->setIsExternal(true);
+                $superVar->setUsed(true, $statement);
+                $this->_variables[$name] = $superVar;
+                return $superVar;
+            }
+        }
+
+        if (!$this->hasVariable($name)) {
+            throw new CompilerException("Cannot mutate variable '" . $name . "' because it wasn't defined", $statement);
+        }
+
+        $variable = $this->getVariable($name);
+        $variable->increaseUses();
+        $variable->increaseMutates();
+
+        /**
+         * Saves the last place where the variable was mutated
+         * We discard mutations inside loops because iterations could use the value
+         * and Zephir only provides top-down compilation
+         */
+        $variable->setUsed(true, $statement);
+
         return $variable;
     }
 
     /**
      * Return a variable in the symbol table, it will be used for a write operation
      *
+     * @param boolean $mustGrownStack
      */
     public function mustGrownStack($mustGrownStack)
     {
@@ -474,7 +547,9 @@ class SymbolTable
     public function getTempVariable($type, $compilationContext)
     {
         $tempVar = $this->_tempVariable++;
-        return $this->addVariable($type, '_' . $tempVar, $compilationContext);
+        $variable = $this->addVariable($type, '_' . $tempVar, $compilationContext);
+        $variable->setTemporal(true);
+        return $variable;
     }
 
     /**

@@ -26,35 +26,63 @@ use Zephir\CompiledExpression;
 use Zephir\Optimizers\OptimizerAbstract;
 
 /**
- * DieOptimizer
+ * CallUserFuncOptimizer
  *
- * Optimizes calls to 'die' using internal function
+ * Optimizer for 'call_user_func'
  */
-class DieOptimizer extends OptimizerAbstract
+class CallUserFuncOptimizer extends OptimizerAbstract
 {
-
     /**
      * @param array $expression
      * @param Call $call
      * @param CompilationContext $context
      * @return bool|CompiledExpression|mixed
-     * @throws CompilerException
      */
     public function optimize(array $expression, Call $call, CompilationContext $context)
     {
-        if (isset($expression['parameters']) && count($expression['parameters']) > 1) {
+        if (!isset($expression['parameters'])) {
             return false;
         }
 
-        $context->headersManager->add('kernel/exit');
-        if (!isset($expression['parameters'])) {
-            $context->codePrinter->output('zephir_exit_empty();');
-        } else {
-            $resolvedParams = $call->getReadOnlyResolvedParams($expression['parameters'], $context, $expression);
-            $context->codePrinter->output('zephir_exit(' . $resolvedParams[0] .');');
+        if (count($expression['parameters']) != 1) {
+            return false;
         }
 
-        $context->codePrinter->output('ZEPHIR_MM_RESTORE();');
-        return new CompiledExpression('null', '', $expression);
+        /**
+         * Process the expected symbol to be returned
+         */
+        $call->processExpectedReturn($context);
+
+        $symbolVariable = $call->getSymbolVariable(true, $context);
+        if ($symbolVariable) {
+            if (!$symbolVariable->isVariable()) {
+                throw new CompilerException("Returned values by functions can only be assigned to variant variables", $expression);
+            }
+            if ($call->mustInitSymbolVariable()) {
+                $symbolVariable->initVariant($context);
+            }
+        } else {
+            $symbolVariable = $context->symbolTable->addTemp('variable', $context);
+            $symbolVariable->initVariant($context);
+        }
+
+        /**
+         * Add the last call status to the current symbol table
+         */
+        $call->addCallStatusFlag($context);
+
+        $resolvedParams = $call->getReadOnlyResolvedParams($expression['parameters'], $context, $expression);
+
+        $context->headersManager->add('kernel/fcall');
+
+        /**
+         * Add the last call status to the current symbol table
+         */
+        $call->addCallStatusFlag($context);
+
+        $context->codePrinter->output('ZEPHIR_CALL_USER_FUNC(' . $symbolVariable->getName() . ', ' . $resolvedParams[0] . ');');
+        $call->addCallStatusOrJump($context);
+
+        return new CompiledExpression('variable', $symbolVariable->getName(), $expression);
     }
 }

@@ -37,6 +37,7 @@ use Zephir\Statements\DoWhileStatement;
 use Zephir\Statements\SwitchStatement;
 use Zephir\Statements\TryCatchStatement;
 use Zephir\Statements\UnsetStatement;
+use Zephir\Passes\MutateGathererPass;
 
 /**
  * StatementsBlock
@@ -51,6 +52,10 @@ class StatementsBlock
 
     protected $_debug = false;
 
+    protected $_loop = false;
+
+    protected $_mutateGatherer;
+
     protected $_lastStatement;
 
     /**
@@ -61,6 +66,18 @@ class StatementsBlock
     public function __construct(array $statements)
     {
         $this->_statements = $statements;
+    }
+
+    /**
+     * Sets whether the statements blocks belongs to a loop
+     *
+     * @param boolean $loop
+     * @return StatementsBlock
+     */
+    public function isLoop($loop)
+    {
+        $this->_loop = $loop;
+        return $this;
     }
 
     /**
@@ -89,6 +106,14 @@ class StatementsBlock
         $this->_unreachable = $unreachable;
 
         $statements = $this->_statements;
+
+        /**
+         * Reference the block if it belongs to a loop
+         */
+        if ($this->_loop) {
+            array_push($compilationContext->cycleBlocks, $this);
+        }
+
         foreach ($statements as $statement) {
 
             /**
@@ -283,6 +308,13 @@ class StatementsBlock
         }
 
         /**
+         * Reference the block if it belongs to a loop
+         */
+        if ($this->_loop) {
+            array_pop($compilationContext->cycleBlocks);
+        }
+
+        /**
          * Traverses temporal variables created in a specific branch
          * marking them as idle
          */
@@ -334,5 +366,22 @@ class StatementsBlock
     public function getLastStatement()
     {
         return $this->_lastStatement;
+    }
+
+    /**
+     * Create/Returns a mutate gatherer pass for this block
+     *
+     * @param boolean $pass
+     * @return MutateGathererPass
+     */
+    public function getMutateGatherer($pass = false)
+    {
+        if (!$this->_mutateGatherer) {
+            $this->_mutateGatherer = new MutateGathererPass;
+        }
+        if ($pass) {
+            $this->_mutateGatherer->pass($this);
+        }
+        return $this->_mutateGatherer;
     }
 }

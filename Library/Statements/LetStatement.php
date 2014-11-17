@@ -68,11 +68,6 @@ class LetStatement extends StatementAbstract
         $statement = $this->_statement;
         foreach ($statement['assignments'] as $assignment) {
 
-            // @todo: Remove this
-            if (isset($assignment['operator']) && $assignment['operator'] == 'ref-assign') {
-                throw new CompilerException('Zephir not support reference assignment for now. Stay tuned for https://github.com/phalcon/zephir/issues/203', $assignment);
-            }
-
             $variable = $assignment['variable'];
 
             /**
@@ -86,6 +81,18 @@ class LetStatement extends StatementAbstract
                 case 'static-property-array-index-append':
                 case 'dynamic-variable-string':
                     $symbolVariable = null;
+                    break;
+
+                case 'array-index':
+                case 'variable-append':
+                case 'object-property':
+                case 'array-index-append':
+                case 'string-dynamic-object-property':
+                case 'variable-dynamic-object-property':
+                case 'array-index-append':
+                case 'string-dynamic-object-property':
+                case 'static-property-array-index-append':
+                    $symbolVariable = $compilationContext->symbolTable->getVariableForUpdate($variable, $compilationContext, $assignment);
                     break;
 
                 default:

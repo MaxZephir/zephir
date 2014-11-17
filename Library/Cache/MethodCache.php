@@ -19,8 +19,10 @@
 
 namespace Zephir\Cache;
 
-use Zephir\CompilationContext;
 use Zephir\Call;
+use Zephir\ClassMethod;
+use Zephir\Variable;
+use Zephir\CompilationContext;
 
 /**
  * MethodCache
@@ -61,11 +63,33 @@ class MethodCache
      * Retrieves/Creates a function cache for a method call
      *
      * @param CompilationContext $compilationContext
-     * @param ClassMethod $call
+     * @param ClassMethod $method
+     * @param Variable $caller
      */
-    public function get(CompilationContext $compilationContext, $method)
+    public function get(CompilationContext $compilationContext, $method, $caller)
     {
         if (!is_object($method)) {
+
+            /**
+             * Try to generate a cache based on the fact the variable is not modified within the loop block
+             */
+            if ($compilationContext->insideCycle && !$caller->isTemporal()) {
+
+                if (count($compilationContext->cycleBlocks) && $caller->getType() == 'variable') {
+
+                    $currentBlock = $compilationContext->cycleBlocks[count($compilationContext->cycleBlocks) - 1];
+
+                    if ($currentBlock->getMutateGatherer(true)->getNumberOfMutations($caller->getName()) == 0) {
+
+                        $functionCache = $compilationContext->symbolTable->getTempVariableForWrite('zephir_fcall_cache_entry', $compilationContext);
+                        $functionCache->setMustInitNull(true);
+                        $functionCache->setReusable(false);
+
+                        return '&' . $functionCache->getName();
+                    }
+                }
+            }
+
             return 'NULL';
         }
 
